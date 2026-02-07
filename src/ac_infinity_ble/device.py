@@ -111,7 +111,7 @@ class ACInfinityController:
     @property
     def is_on(self) -> bool:
         """Get whether the device is on."""
-        return bool(self._state.work_type == 2 and self._state.fan)
+        return bool(self._state.fan)
 
     @property
     def speed(self) -> int:
