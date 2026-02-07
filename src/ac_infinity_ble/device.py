@@ -461,7 +461,7 @@ class ACInfinityController:
 
         self._notify_future = asyncio.Future()
         try:
-            await self._client.write_gatt_char(self._write_char, command, False)
+            await self._client.write_gatt_char(self._write_char, command, True)
         except (BleakError, BleakDBusError, OSError) as ex:
             self._notify_future = None
             _LOGGER.debug("%s: Write failed: %s, will retry", self.name, ex)
