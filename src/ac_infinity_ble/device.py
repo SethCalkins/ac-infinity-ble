@@ -160,7 +160,6 @@ class ACInfinityController:
 
     async def update(self) -> None:
         """Update the controller."""
-        await self._ensure_connected()
         _LOGGER.debug("%s: Updating", self.name)
         command = self._protocol.get_model_data(self._state.type, 0, self.sequence)
         if data := await self._send_command(command):
@@ -180,11 +179,9 @@ class ACInfinityController:
                 if self._state.work_type == 2:
                     self._state.fan = self._state.level_on
                 self._fire_callbacks(CallbackType.UPDATE_RESPONSE)
-        await self._execute_disconnect()
 
     async def turn_on(self, speed: int | None = None) -> None:
         """Turn on the controller."""
-        await self._ensure_connected()
         _LOGGER.debug("%s: Turn on", self.name)
         self._state.work_type = 2
         if speed is not None:
@@ -198,11 +195,9 @@ class ACInfinityController:
             self._state.type, 2, self._state.level_on, 0, self.sequence
         )
         await self._send_command(command)
-        await self._execute_disconnect()
 
     async def turn_off(self) -> None:
         """Turn off the controller."""
-        await self._ensure_connected()
         _LOGGER.debug("%s: Turn off", self.name)
         self._state.work_type = 1
         self._state.fan = self._state.level_off or 0
@@ -211,14 +206,12 @@ class ACInfinityController:
             self._state.type, 1, self._state.level_off, 0, self.sequence
         )
         await self._send_command(command)
-        await self._execute_disconnect()
 
     async def set_speed(self, speed: int) -> None:
         """Set the speed of the controller."""
-        await self._ensure_connected()
         _LOGGER.debug("%s: Set speed to %s", self.name, speed)
         self._state.work_type = 2 if speed > 0 else 1
-        self.state.fan = speed
+        self._state.fan = speed
         if self._state.work_type == 1:
             self._state.level_off = speed
         else:
@@ -227,7 +220,6 @@ class ACInfinityController:
             self._state.type, self._state.work_type, speed, 0, self.sequence
         )
         await self._send_command(command)
-        await self._execute_disconnect()
 
     async def stop(self) -> None:
         """Stop the controller."""
@@ -470,7 +462,7 @@ class ACInfinityController:
 
         notify_msg = None
         try:
-            async with async_timeout.timeout(5):
+            async with async_timeout.timeout(10):
                 notify_msg = await self._notify_future
         except asyncio.TimeoutError:
             _LOGGER.warning(
