@@ -91,10 +91,10 @@ class ACInfinityController:
         self._state = replace(
             self._state, **{k: v for k, v in asdict(info).items() if v is not None}
         )
-        if self._state.fan:
-            if self._state.level_off or 0 > self._state.fan:
+        if self._state.fan is not None:
+            if self._state.work_type == 1:
                 self._state.level_off = self._state.fan
-            if self._state.level_on or 10 < self._state.fan:
+            elif self._state.work_type == 2:
                 self._state.level_on = self._state.fan
         self._fire_callbacks(CallbackType.ADVERTISEMENT)
 
@@ -139,6 +139,11 @@ class ACInfinityController:
         if self._advertisement_data:
             return self._advertisement_data.rssi
         return None
+
+    @property
+    def work_mode(self) -> int:
+        """Get the work mode of the device."""
+        return self._state.work_type or 0
 
     @property
     def state(self) -> DeviceInfo:

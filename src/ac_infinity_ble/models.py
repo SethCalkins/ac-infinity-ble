@@ -5,9 +5,9 @@ from dataclasses import dataclass
 
 @dataclass
 class DeviceInfo:
-    type: int
-    name: str
-    version: int
+    type: int = 0
+    name: str = ""
+    version: int = 0
     is_degree: bool | None = None
     tmp_state: int | None = None
     hum_state: int | None = None
