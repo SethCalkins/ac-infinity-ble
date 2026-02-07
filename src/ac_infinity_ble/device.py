@@ -317,6 +317,7 @@ class ACInfinityController:
                 self._state.vpd = get_short(data, 12) / 100
                 self._state.fan_type = get_short(data, 14)
                 self._state.fan_state = get_bits(data[16], 0, 2)
+                self._state.fan = get_bits(data[17], 0, 4)
                 self._state.work_type = get_bits(data[17], 4, 4)
                 self._fire_callbacks(CallbackType.NOTIFICATION)
             except (IndexError, ValueError) as ex:
