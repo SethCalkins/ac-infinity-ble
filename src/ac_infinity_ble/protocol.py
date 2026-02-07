@@ -47,10 +47,12 @@ def get_mode(mode: int) -> str:
 
 
 def parse_manufacturer_data(data: bytes) -> DeviceInfo:
+    if len(data) < 19:
+        return DeviceInfo()
     device = DeviceInfo(
         type=data[12],
         version=data[11],
-        name=f"{get_type(data[12])}-{data[6:11].decode('ascii')}",
+        name=f"{get_type(data[12])}-{data[6:11].decode('ascii', errors='replace')}",
         is_degree=True ^ get_bit(data[13], 1),
         fan_state=get_bits(data[13], 2, 2),
         tmp_state=get_bits(data[13], 4, 2),
@@ -59,7 +61,7 @@ def parse_manufacturer_data(data: bytes) -> DeviceInfo:
         hum=get_short(data, 16) / 100,
         fan=data[18],
     )
-    if device.version >= 3 and device.type in [7, 9, 11, 12]:
+    if device.version >= 3 and device.type in [7, 9, 11, 12] and len(data) >= 23:
         device.choose_port = data[19]
         device.vpd_state = get_bits(data[20], 0, 2)
         device.vpd = get_short(data, 21) / 100

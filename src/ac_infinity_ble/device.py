@@ -51,9 +51,14 @@ class ACInfinityController:
         self._ble_device = ble_device
         self._advertisement_data = advertisement_data
         self._operation_lock = asyncio.Lock()
-        self._state = state or parse_manufacturer_data(
-            advertisement_data.manufacturer_data[MANUFACTURER_ID]  # type: ignore
-        )
+        if state:
+            self._state = state
+        elif advertisement_data and MANUFACTURER_ID in advertisement_data.manufacturer_data:
+            self._state = parse_manufacturer_data(
+                advertisement_data.manufacturer_data[MANUFACTURER_ID]
+            )
+        else:
+            self._state = DeviceInfo()
         self._connect_lock: asyncio.Lock = asyncio.Lock()
         self._read_char: BleakGATTCharacteristic | None = None
         self._write_char: BleakGATTCharacteristic | None = None
@@ -72,9 +77,17 @@ class ACInfinityController:
         """Set the ble device."""
         self._ble_device = ble_device
         self._advertisement_data = advertisement_data
-        info = parse_manufacturer_data(
-            advertisement_data.manufacturer_data[MANUFACTURER_ID]
-        )
+        if MANUFACTURER_ID not in advertisement_data.manufacturer_data:
+            return
+        raw = advertisement_data.manufacturer_data[MANUFACTURER_ID]
+        if len(raw) < 19:
+            _LOGGER.debug(
+                "%s: Advertisement data too short (%d bytes), skipping",
+                self.name,
+                len(raw),
+            )
+            return
+        info = parse_manufacturer_data(raw)
         self._state = replace(
             self._state, **{k: v for k, v in asdict(info).items() if v is not None}
         )
@@ -146,14 +159,22 @@ class ACInfinityController:
         _LOGGER.debug("%s: Updating", self.name)
         command = self._protocol.get_model_data(self._state.type, 0, self.sequence)
         if data := await self._send_command(command):
-            self._state.work_type = data[12]
-            self._state.level_off = data[15]
-            self._state.level_on = data[18]
-            if self._state.work_type == 1:
-                self._state.fan = self._state.level_off
-            if self._state.work_type == 2:
-                self._state.fan = self._state.level_on
-            self._fire_callbacks(CallbackType.UPDATE_RESPONSE)
+            if len(data) < 19:
+                _LOGGER.debug(
+                    "%s: Update response too short (%d bytes): %s",
+                    self.name,
+                    len(data),
+                    data.hex(),
+                )
+            else:
+                self._state.work_type = data[12]
+                self._state.level_off = data[15]
+                self._state.level_on = data[18]
+                if self._state.work_type == 1:
+                    self._state.fan = self._state.level_off
+                if self._state.work_type == 2:
+                    self._state.fan = self._state.level_on
+                self._fire_callbacks(CallbackType.UPDATE_RESPONSE)
         await self._execute_disconnect()
 
     async def turn_on(self, speed: int | None = None) -> None:
@@ -255,6 +276,15 @@ class ACInfinityController:
                 # Try to handle services failing to load
                 resolved = self._resolve_characteristics(await client.get_services())
 
+            if not resolved:
+                _LOGGER.error(
+                    "%s: Could not resolve BLE characteristics; RSSI: %s",
+                    self.name,
+                    self.rssi,
+                )
+                await client.disconnect()
+                raise CharacteristicMissingError("Could not resolve characteristics")
+
             self._client = client
             self._reset_disconnect_timer()
 
@@ -270,20 +300,24 @@ class ACInfinityController:
             self._notify_future.set_result(data)
             return
 
-        if data[0] == 0x1E and data[1] == 0xFF:
-            self._state.is_degree = get_bit(data[6], 0)
-            self._state.tmp_state = get_bits(data[6], 1, 2)
-            self._state.hum_state = get_bits(data[6], 3, 2)
-            self._state.vpd_state = get_bits(data[6], 5, 2)
-            self._state.choose_port = get_bits(data[7], 4, 4)
-            self._state.tmp = get_short(data, 8) / 100
-            self._state.hum = get_short(data, 10) / 100
-            self._state.vpd = get_short(data, 12) / 100
-            self._state.fan_type = get_short(data, 14)
-            self._state.fan_state = get_bits(data[16], 0, 2)
-            # self._state.fan = get_bits(data[17], 0, 4) # Not accurate
-            self._state.work_type = get_bits(data[17], 4, 4)
-            self._fire_callbacks(CallbackType.NOTIFICATION)
+        if len(data) >= 18 and data[0] == 0x1E and data[1] == 0xFF:
+            try:
+                self._state.is_degree = get_bit(data[6], 0)
+                self._state.tmp_state = get_bits(data[6], 1, 2)
+                self._state.hum_state = get_bits(data[6], 3, 2)
+                self._state.vpd_state = get_bits(data[6], 5, 2)
+                self._state.choose_port = get_bits(data[7], 4, 4)
+                self._state.tmp = get_short(data, 8) / 100
+                self._state.hum = get_short(data, 10) / 100
+                self._state.vpd = get_short(data, 12) / 100
+                self._state.fan_type = get_short(data, 14)
+                self._state.fan_state = get_bits(data[16], 0, 2)
+                self._state.work_type = get_bits(data[17], 4, 4)
+                self._fire_callbacks(CallbackType.NOTIFICATION)
+            except (IndexError, ValueError) as ex:
+                _LOGGER.debug(
+                    "%s: Error parsing notification data: %s", self.name, ex
+                )
 
     def _reset_disconnect_timer(self) -> None:
         """Reset disconnect timer."""
@@ -409,18 +443,35 @@ class ACInfinityController:
 
     async def _execute_command_locked(self, command: bytes) -> bytes:
         """Execute command and read response."""
-        assert self._client is not None  # nosec
+        # Reconnect if the device dropped the connection (common with AC Infinity)
+        if self._client is None or not self._client.is_connected:
+            _LOGGER.debug("%s: Client disconnected before command, reconnecting", self.name)
+            await self._ensure_connected()
+        if self._client is None:
+            raise BleakError("Failed to establish BLE connection")
         if not self._read_char:
             raise CharacteristicMissingError("Read characteristic missing")
         if not self._write_char:
             raise CharacteristicMissingError("Write characteristic missing")
 
         self._notify_future = asyncio.Future()
-        await self._client.write_gatt_char(self._write_char, command, False)
+        try:
+            await self._client.write_gatt_char(self._write_char, command, False)
+        except (BleakError, BleakDBusError, OSError) as ex:
+            self._notify_future = None
+            _LOGGER.debug("%s: Write failed: %s, will retry", self.name, ex)
+            raise
 
         notify_msg = None
-        async with async_timeout.timeout(5):
-            notify_msg = await self._notify_future
+        try:
+            async with async_timeout.timeout(5):
+                notify_msg = await self._notify_future
+        except asyncio.TimeoutError:
+            _LOGGER.warning(
+                "%s: Timeout waiting for notification response", self.name
+            )
+            self._notify_future = None
+            raise
 
         self._notify_future = None
         return notify_msg
